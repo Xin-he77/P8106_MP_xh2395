@@ -6,17 +6,38 @@ output: github_document
 ---
 
 ```{r setup, include=FALSE}
-library(tidyverse)
 knitr::opts_chunk$set(
     fig.align = 'center',
-    fig.width = 7,
-    fig.asp = 0.6,
-    out.width = "80%",
     message = F,
-    warning = F
+    warning = F,
+    echo = T
  )
+
+library(tidyverse)
 library(caret)
 library(pls)
+library(patchwork)
+library(splines)
+library(gam)
+library(mgcv)
+library(boot)
+library(ggplot2)
+library(pdp)
+library(earth)
+
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5) 
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(.8, .1, .1, 1) 
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+```
+
+## Set random seed
+
+```{r}
+set.seed(2020)
 ```
 
 ## Import the data
@@ -24,4 +45,292 @@ library(pls)
 ```{r}
 wine_df = read_csv("./data/winequality_red.csv")
 ```
+
+## Set train data and test data
+
+```{r}
+trRows = createDataPartition(wine_df$quality, p = .75, list = F)
+
+train_df = wine_df[trRows,]
+
+test_df = wine_df[-trRows,]
+```
+
+## Define X, Y and control
+
+```{r}
+# full data
+full_X = model.matrix(quality ~ .,wine_df)[,-1]
+full_Y = wine_df$quality
+# train data
+train_X = model.matrix(quality ~ .,train_df)[,-1]
+train_Y = train_df$quality
+# test data
+test_X = model.matrix(quality ~ .,test_df)[,-1]
+test_Y = test_df$quality
+
+train_control = trainControl(method = "cv",number = 10)
+```
+
+## Create Scatter Plots 
+
+response vs predictors
+
+```{r,fig.height=16, fig.width=12}
+featurePlot(full_X, full_Y, plot = "scatter", labels = c("","Y"), type = c("p"), layout = c(3, 4))
+```
+
+## Linear model
+
+### Fit a linear model using least squares on the training data
+
+```{r}
+lm_fit = train(
+    x = train_X,
+    y = train_Y, 
+    method = 'lm',
+    trControl = train_control,
+    metric = 'RMSE'
+)
+```
+
+### Summary
+
+```{r}
+summary(lm_fit)
+```
+
+R-squared:  0.3683
+
+### Calculate the mean square error using the test data
+
+```{r}
+train_mse = mean(lm_fit$residuals^2)
+train_mse
+
+lm_predict_Y = predict.train(lm_fit, test_X)
+lm_test_mse = mean((test_Y - lm_predict_Y) ^ 2)
+lm_test_mse
+```
+
+## Ridge regression model
+
+### Fit a ridge regression model on the training data, with lambda chosen by cross-validation
+
+```{r}
+ridge_fit = train(
+    x = train_X,
+    y = train_Y, 
+    method = 'glmnet',
+    tuneGrid = expand.grid(alpha = 0,lambda = exp(seq(-8, 10, length = 100))),
+    trControl = train_control,
+    metric = 'RMSE'
+)
+```
+
+### Summary  
+  
+```{r}
+ridge_fit$bestTune
+coef(ridge_fit$finalModel, ridge_fit$bestTune$lambda)
+```
+
+### Plot
+
+```{r}
+plot(ridge_fit, xTrans = function(x)log(x))
+```
+
+### Report the test error
+
+```{r}
+ridge_predict_Y = predict.train(ridge_fit, test_X)
+ridge_test_mse = mean((test_Y - ridge_predict_Y)^2)
+
+ridge_test_mse
+```
+
+## Lasso regression model
+
+### Fit a lasso regression model on the training data, with lambda chosen by cross-validation
+
+```{r}
+lasso_fit = train(
+    x = train_X,
+    y = train_Y, 
+    method = 'glmnet',
+    tuneGrid = expand.grid(alpha = 1,lambda = exp(seq(-8, 10, length = 100))),
+    trControl = train_control
+)
+```
+
+### Summary
+
+```{r}
+lasso_fit$bestTune
+coef(lasso_fit$finalModel,lasso_fit$bestTune$lambda)
+```
+
+The number of non-zero coefficient estimates (exclude intercept) is 10.
+
+### Plot
+
+```{r}
+plot(lasso_fit, xTrans = function(x)log(x))
+```
+
+### Report the test error
+
+```{r}
+lasso_predict_Y = predict.train(lasso_fit, test_X)
+lasso_test_mse = mean((test_Y - lasso_predict_Y)^2)
+
+lasso_test_mse
+```
+
+## Principle component regression model
+
+### Fit a pcr model on the training data, with M chosen by cross-validation
+
+```{r}
+pcr_fit = train(
+    x = train_X,
+    y = train_Y, 
+    method = 'pcr',
+    tuneLength = length(train_df) - 1,
+    trControl = train_control,
+    scale = TRUE
+)
+```
+
+### Summary
+
+```{r}
+pcr_fit$bestTune
+```
+
+The value of M selected by cross-validation is `r pcr_fit$bestTune`.
+
+### Plot
+
+```{r}
+plot(pcr_fit)
+```
+
+### Report the test error
+
+```{r}
+pcr_predict_Y = predict.train(pcr_fit, test_X)
+pcr_test_mse = mean((test_Y - pcr_predict_Y)^2)
+
+pcr_test_mse
+```
+
+## Smoothing Spline Model
+
+### The degree of freedom obtained by generalized cv
+
+```{r}
+fit.ss = smooth.spline(wine_df$alcohol, wine_df$quality)
+fit.ss$df
+```
+
+### Plot the resulting fit
+
+```{r}
+alcohollims = range(wine_df$alcohol)
+alcohol.grid = seq(from = alcohollims[1],to = alcohollims[2])
+pred.ss = predict(fit.ss,
+                   x = alcohol.grid)
+pred.ss.df = data.frame(pred = pred.ss$y,
+                         alcohol = alcohol.grid)
+p_0 = ggplot(data = wine_df, aes(x = alcohol, y = quality)) +
+  geom_point(color = rgb(.2, .4, .2, .5))
+p_ss = p_0 + 
+  geom_line(aes(x = alcohol, y = pred), data = pred.ss.df,
+          color = rgb(.8, .1, .1, 1)) +
+  labs(title = "Degree of freedom: 17.96074 (obtained by generalized cv)")
+p_ss
+```
+
+## Generalized Additive Model
+
+### Fit GAM model
+
+```{r}
+wine_df1 = wine_df %>% 
+  rename(fixed_acidity = `fixed acidity`,
+         volatile_acidity = `volatile acidity`,
+         citric_acid = `citric acid`,
+         residual_sugar =`residual sugar`,
+         free_sulfur_dioxide = `free sulfur dioxide`,
+         total_sulfur_dioxide =`total sulfur dioxide`)
+
+gam_fit1 = gam(quality ~ fixed_acidity+volatile_acidity+citric_acid+residual_sugar+free_sulfur_dioxide+total_sulfur_dioxide+chlorides+density+pH+sulphates+alcohol, data = wine_df1)
+
+gam_fit2 = gam(quality ~ s(fixed_acidity)+s(volatile_acidity)+s(citric_acid)+s(residual_sugar)+s(free_sulfur_dioxide)+s(total_sulfur_dioxide)+s(chlorides)+s(density)+s(pH)+s(sulphates)+s(alcohol), data = wine_df1)
+```
+
+### Summary
+
+```{r}
+summary(gam_fit1)
+
+summary(gam_fit2)
+```
+
+## Plot 
+
+```{r, fig.height=16, fig.width=12}
+par(mfrow = c(4,3))
+plot(gam_fit2)
+```
+
+## Multivariate Adaptive Regression Splines Model
+
+### Fit MARS model
+
+```{r}
+mars_grid = expand.grid(degree = 1:2,
+                         nprune = 2:10)
+
+mars_fit = train(train_X, train_Y, 
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = train_control)
+```
+
+### Summary
+
+```{r}
+mars_fit$bestTune
+
+coef(mars_fit$finalModel)
+
+summary(mars_fit)
+```
+
+### Plot
+
+```{r}
+ggplot(mars_fit)
+```
+
+## Compare different models
+
+```{r}
+resamp = resamples(list(lm = lm_fit,
+                        ridge = ridge_fit,
+                        lasso = lasso_fit,
+                        pcr = pcr_fit,
+                        mars = mars_fit))
+
+summary(resamp)
+
+bwplot(resamp, metric = "RMSE")
+```
+
+
+
+
 
