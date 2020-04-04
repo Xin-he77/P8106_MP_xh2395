@@ -1,0 +1,27 @@
+---
+title: "P8106_MP_xh2395"
+author: "Xin  He"
+date: "4/4/2020"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+knitr::opts_chunk$set(
+    fig.align = 'center',
+    fig.width = 7,
+    fig.asp = 0.6,
+    out.width = "80%",
+    message = F,
+    warning = F
+ )
+library(caret)
+library(pls)
+```
+
+## Import the data
+
+```{r}
+wine_df = read_csv("./data/winequality_red.csv")
+```
+
