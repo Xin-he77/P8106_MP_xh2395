@@ -266,24 +266,36 @@ wine_df1 = wine_df %>%
          free_sulfur_dioxide = `free sulfur dioxide`,
          total_sulfur_dioxide =`total sulfur dioxide`)
 
-gam_fit1 = gam(quality ~ fixed_acidity+volatile_acidity+citric_acid+residual_sugar+free_sulfur_dioxide+total_sulfur_dioxide+chlorides+density+pH+sulphates+alcohol, data = wine_df1)
+full1_X = model.matrix(quality ~ .,wine_df1)[,-1]
+full1_Y = wine_df1$quality
 
-gam_fit2 = gam(quality ~ s(fixed_acidity)+s(volatile_acidity)+s(citric_acid)+s(residual_sugar)+s(free_sulfur_dioxide)+s(total_sulfur_dioxide)+s(chlorides)+s(density)+s(pH)+s(sulphates)+s(alcohol), data = wine_df1)
+gam_fit = train(full1_X, full1_Y,
+                 method = "gam",
+                 tuneGrid = data.frame(method = "GCV.Cp", 
+                                       select = c(TRUE,FALSE)), 
+                 trControl = train_control)
 ```
 
 ### Summary
 
 ```{r}
-summary(gam_fit1)
+gam_fit$bestTune
 
-summary(gam_fit2)
+gam_fit$finalModel
+
+summary(gam_fit)
 ```
 
 ## Plot 
 
 ```{r, fig.height=16, fig.width=12}
+gam = gam(quality ~ s(free_sulfur_dioxide) + s(alcohol) + s(citric_acid) + 
+    s(pH) + s(residual_sugar) + s(fixed_acidity) + s(sulphates) + 
+    s(volatile_acidity) + s(total_sulfur_dioxide) + s(chlorides) + 
+    s(density), data = wine_df1)
+
 par(mfrow = c(4,3))
-plot(gam_fit2)
+plot(gam)
 ```
 
 ## Multivariate Adaptive Regression Splines Model
@@ -323,6 +335,7 @@ resamp = resamples(list(lm = lm_fit,
                         ridge = ridge_fit,
                         lasso = lasso_fit,
                         pcr = pcr_fit,
+                        gam = gam_fit,
                         mars = mars_fit))
 
 summary(resamp)
